@@ -35,9 +35,9 @@ The viewer UI activity spinner would spin indefinitely because `isAnySessionProc
 
 ## [v10.6.0] - 2026-03-18
 
-## OpenClaw: System prompt context injection
+## External Gateway: System prompt context injection
 
-The OpenClaw plugin no longer writes to `MEMORY.md`. Instead, it injects the observation timeline into each agent's system prompt via the `before_prompt_build` hook using `appendSystemContext`. This keeps `MEMORY.md` under the agent's control for curated long-term memory. Context is cached for 60 seconds per project.
+The External Gateway plugin no longer writes to `MEMORY.md`. Instead, it injects the observation timeline into each agent's system prompt via the `before_prompt_build` hook using `appendSystemContext`. This keeps `MEMORY.md` under the agent's control for curated long-term memory. Context is cached for 60 seconds per project.
 
 ## New `syncMemoryFileExclude` config
 
@@ -49,7 +49,7 @@ The viewer settings hook used `||` instead of `??`, which silently replaced back
 
 ## Documentation
 
-- Updated `openclaw-integration.mdx` and `openclaw/SKILL.md` to reflect system prompt injection behavior
+- Updated `external-gateway-integration.mdx` and `external-gateway/SKILL.md` to reflect system prompt injection behavior
 - Fixed "prompt injection" → "context injection" terminology to avoid confusion with the OWASP security term
 
 ## [v10.5.6] - 2026-03-16
@@ -203,7 +203,7 @@ The standard exploration cycle (Glob → Grep → Read) forces agents to consume
 ### Refactor
 - **Skills Conversion**: Converted `/make-plan` and `/do` commands into first-class skills in `plugin/skills/`.
 - **Organization**: Centralized planning and execution instructions alongside `mem-search`.
-- **Compatibility**: Added symlinks for `openclaw/skills/` to ensure seamless integration with OpenClaw.
+- **Compatibility**: Added symlinks for `external-gateway/skills/` to ensure seamless integration with External Gateway.
 
 ### Chore
 - **Version Bump**: Aligned all package and plugin manifests to v10.4.1.
@@ -494,7 +494,7 @@ Addresses the persistent embedding pipeline failures reported across #1104, #110
 ## Infrastructure
 
 - Added multi-tenancy support for claude-mem Pro
-- Updated OpenClaw install URLs to `install.cmem.ai`
+- Updated External Gateway install URLs to `install.cmem.ai`
 - Added Vercel deploy workflow for install scripts
 - Added `.claude/plans` and `.claude/worktrees` to `.gitignore`
 
@@ -502,42 +502,42 @@ Addresses the persistent embedding pipeline failures reported across #1104, #110
 
 ## Bug Fixes
 
-- **OpenClaw: Fix MEMORY.md project query mismatch** — `syncMemoryToWorkspace` now includes both the base project name and the agent-scoped project name (e.g., both "openclaw" and "openclaw-main") when querying for context injection, ensuring the correct observations are pulled into MEMORY.md.
+- **External Gateway: Fix MEMORY.md project query mismatch** — `syncMemoryToWorkspace` now includes both the base project name and the agent-scoped project name (e.g., both "external-gateway" and "external-gateway-main") when querying for context injection, ensuring the correct observations are pulled into MEMORY.md.
 
-- **OpenClaw: Add feed botToken support for Telegram** — Feeds can now configure a dedicated `botToken` for direct Telegram message delivery, bypassing the OpenClaw gateway channel. This fixes scenarios where the gateway bot token couldn't be used for feed messages.
+- **External Gateway: Add feed botToken support for Telegram** — Feeds can now configure a dedicated `botToken` for direct Telegram message delivery, bypassing the External Gateway gateway channel. This fixes scenarios where the gateway bot token couldn't be used for feed messages.
 
 ## Other
 
-- Changed OpenClaw plugin kind from "integration" to "memory" for accuracy.
+- Changed External Gateway plugin kind from "integration" to "memory" for accuracy.
 
 ## [v10.0.5] - 2026-02-13
 
-## OpenClaw Installer & Distribution
+## External Gateway Installer & Distribution
 
-This release introduces the OpenClaw one-liner installer and fixes several OpenClaw plugin issues.
+This release introduces the External Gateway one-liner installer and fixes several External Gateway plugin issues.
 
 ### New Features
 
-- **OpenClaw Installer** (`openclaw/install.sh`): Full cross-platform installer script with `curl | bash` support
+- **External Gateway Installer** (`external-gateway/install.sh`): Full cross-platform installer script with `curl | bash` support
   - Platform detection (macOS, Linux, WSL)
   - Automatic dependency management (Bun, uv, Node.js)
   - Interactive AI provider setup with settings writer
-  - OpenClaw gateway detection, plugin install, and memory slot configuration
+  - External Gateway gateway detection, plugin install, and memory slot configuration
   - Worker startup and health verification with rich diagnostics
   - TTY detection, `--provider`/`--api-key` CLI flags
   - Error recovery and upgrade handling for existing installations
   - jq/python3/node fallback chain for JSON config writing
-- **Distribution readiness tests** (`openclaw/test-install.sh`): Comprehensive test suite for the installer
+- **Distribution readiness tests** (`external-gateway/test-install.sh`): Comprehensive test suite for the installer
 - **Enhanced `/api/health` endpoint**: Now returns version, uptime, workerPath, and AI status
 
 ### Bug Fixes
 
-- Fix: use `event.prompt` instead of `ctx.sessionKey` for prompt storage in OpenClaw plugin
-- Fix: detect both `openclaw` and `openclaw.mjs` binary names in gateway discovery
+- Fix: use `event.prompt` instead of `ctx.sessionKey` for prompt storage in External Gateway plugin
+- Fix: detect both `external-gateway` and `external-gateway.mjs` binary names in gateway discovery
 - Fix: pass file paths via env vars instead of bash interpolation in `node -e` calls
-- Fix: handle stale plugin config that blocks OpenClaw CLI during reinstall
+- Fix: handle stale plugin config that blocks External Gateway CLI during reinstall
 - Fix: remove stale memory slot reference during reinstall cleanup
-- Fix: remove opinionated filters from OpenClaw plugin
+- Fix: remove opinionated filters from External Gateway plugin
 
 ## [v10.0.4] - 2026-02-12
 
@@ -622,31 +622,31 @@ Closes #1063, closes #695. Relates to #1010, #707.
 
 ## What's Changed
 
-### OpenClaw Observation Feed
-- Enabled SSE observation feed for OpenClaw agent sessions, allowing real-time streaming of observations to connected OpenClaw clients
+### External Gateway Observation Feed
+- Enabled SSE observation feed for External Gateway agent sessions, allowing real-time streaming of observations to connected External Gateway clients
 - Fixed `ObservationSSEPayload.project` type to be nullable, preventing type errors when project context is unavailable
-- Added `EnvManager` support for OpenClaw environment configuration
+- Added `EnvManager` support for External Gateway environment configuration
 
 ### Build Artifacts
 - Rebuilt worker service and MCP server with latest changes
 
 ## [v10.0.0] - 2026-02-11
 
-## OpenClaw Plugin — Persistent Memory for OpenClaw Agents
+## External Gateway Plugin — Persistent Memory for External Gateway Agents
 
-Claude-mem now has an official [OpenClaw](https://openclaw.ai) plugin, bringing persistent memory to agents running on the OpenClaw gateway. This is a major milestone — claude-mem's memory system is no longer limited to Claude Code sessions.
+Claude-mem now has an official [External Gateway](https://external-gateway.ai) plugin, bringing persistent memory to agents running on the External Gateway gateway. This is a major milestone — claude-mem's memory system is no longer limited to Claude Code sessions.
 
 ### What It Does
 
-The plugin bridges claude-mem's observation pipeline with OpenClaw's embedded runner (`pi-embedded`), which calls the Anthropic API directly without spawning a `claude` process. Three core capabilities:
+The plugin bridges claude-mem's observation pipeline with External Gateway's embedded runner (`pi-embedded`), which calls the Anthropic API directly without spawning a `claude` process. Three core capabilities:
 
-1. **Observation Recording** — Captures every tool call from OpenClaw agents and sends it to the claude-mem worker for AI-powered compression and storage
+1. **Observation Recording** — Captures every tool call from External Gateway agents and sends it to the claude-mem worker for AI-powered compression and storage
 2. **MEMORY.md Live Sync** — Writes a continuously-updated memory timeline to each agent's workspace, so agents start every session with full context from previous work
 3. **Observation Feed** — Streams new observations to messaging channels (Telegram, Discord, Slack, Signal, WhatsApp, LINE) in real-time via SSE
 
 ### Quick Start
 
-Add claude-mem to your OpenClaw gateway config:
+Add claude-mem to your External Gateway gateway config:
 
 ```json
 {
@@ -678,7 +678,7 @@ The claude-mem worker service must be running on the same machine (`localhost:37
 ### How the Event Lifecycle Works
 
 ```
-OpenClaw Gateway
+External Gateway Gateway
   ├── session_start ──────────→ Init claude-mem session
   ├── before_agent_start ─────→ Sync MEMORY.md + track workspace
   ├── tool_result_persist ────→ Record observation + re-sync MEMORY.md
@@ -689,7 +689,7 @@ OpenClaw Gateway
 
 All observation recording and MEMORY.md syncs are fire-and-forget — they never block the agent.
 
-📖 Full documentation: [OpenClaw Integration Guide](https://docs.claude-mem.ai/docs/openclaw-integration)
+📖 Full documentation: [External Gateway Integration Guide](https://docs.claude-mem.ai/docs/external-gateway-integration)
 
 ---
 

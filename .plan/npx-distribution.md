@@ -10,8 +10,7 @@
 
 - **npm package already has everything**: `plugin/` directory ships pre-built. No git clone or build needed.
 - **Transcript watcher already exists**: `src/services/transcripts/` has a fully built schema-based JSONL tailer. It just needs schemas for more tools.
-- **3 integration tiers exist**: (1) Hook/plugin-based (Claude Code, Gemini CLI, OpenCode, Windsurf, Codex CLI, OpenClaw), (2) MCP-based (Cursor, Copilot CLI, Antigravity, Goose, Crush, Roo Code), (3) Transcript-based (anything with structured log files).
-- **OpenClaw plugin already built**: Full plugin at `openclaw/src/index.ts` (1000+ lines). Needs to be wired into the npx installer.
+- **3 integration tiers exist**: (1) Hook/plugin-based (Claude Code, Gemini CLI, OpenCode, Windsurf, Codex CLI), (2) MCP-based (Cursor, Copilot CLI, Antigravity, Goose, Crush, Roo Code), (3) Transcript-based (anything with structured log files).
 - **Gemini CLI is architecturally near-identical to Claude Code**: 11 lifecycle hooks, JSON via stdin/stdout, exit code 0/2 convention, `GEMINI.md` context files, `~/.gemini/settings.json`. This is the easiest high-value integration.
 - **OpenCode has the richest plugin system**: 20+ hook events across 12 categories, JS/TS plugin modules, custom tool creation, MCP support. 110k stars — largest open-source AI CLI.
 - **`npx skills` by Vercel supports 41 agents** — proving the multi-IDE installer UX works. Their agent detection pattern (check if config dir exists) is the right model.
@@ -58,7 +57,7 @@ npx claude-mem transcript watch         # Start transcript watcher
 | OpenCode | 20+ event hooks + plugin SDK | `~/.config/opencode/opencode.json` | AGENTS.md + rules dirs | ~110k stars |
 | Windsurf | 11 Cascade hooks | `.windsurf/hooks.json` | `.windsurf/rules/*.md` | ~1M users |
 | Codex CLI | `notify` hook | `~/.codex/config.toml` | `.codex/AGENTS.md`, MCP | Growing (OpenAI) |
-| OpenClaw | 8 event hooks + plugin SDK | `~/.openclaw/openclaw.json` | MEMORY.md sync | ~196k stars |
+
 
 **Tier 2 — MCP Integration** (tool-based, search + context injection):
 
@@ -90,7 +89,7 @@ npx claude-mem transcript watch         # Start transcript watcher
 | Platform adapters | Claude Code + Cursor + raw | `src/cli/adapters/` |
 | Transcript watcher | Complete (schema-based JSONL) | `src/services/transcripts/` |
 | Codex transcript schema | Sample exists | `src/services/transcripts/config.ts` |
-| OpenClaw plugin | Complete (1000+ lines) | `openclaw/src/index.ts` |
+
 | MCP server | Complete | `plugin/scripts/mcp-server.cjs` |
 | Gemini CLI support | Not started | — |
 | OpenCode support | Not started | — |
@@ -153,7 +152,7 @@ npx claude-mem transcript watch         # Start transcript watcher
      - Claude Code: `~/.claude/` exists
      - Gemini CLI: `~/.gemini/` exists
      - OpenCode: `~/.config/opencode/` exists OR `opencode` in PATH
-     - OpenClaw: `~/.openclaw/` exists
+
      - Windsurf: `~/.codeium/windsurf/` exists
      - Codex CLI: `~/.codex/` exists
      - Cursor: `~/.cursor/` exists
@@ -211,15 +210,9 @@ npx claude-mem transcript watch         # Start transcript watcher
 
 4. **Update `prepublishOnly`** to ensure CLI is built before npm publish (already covered — `npm run build` calls `build-hooks.js`)
 
-5. **Pre-build OpenClaw plugin**: Add an esbuild step that compiles `openclaw/src/index.ts` → `openclaw/dist/index.js` so it ships ready-to-use. No `tsc` at install time.
-
-6. **Add `openclaw/dist/` to `package.json` `files` field** (or add `openclaw` if the whole directory should ship)
-
 ### Verification
 
 - `npm run build` produces `dist/cli/index.js` with correct shebang
-- `npm run build` produces `openclaw/dist/index.js` pre-built
-- `npm pack` includes both `dist/cli/index.js` and `openclaw/dist/`
 - `node dist/cli/index.js --help` works without Bun
 - Package size is reasonable (check with `npm pack --dry-run`)
 
@@ -574,36 +567,7 @@ Codex has both a `notify` hook (real-time) and transcript files (complete histor
 
 ---
 
-## Phase 7: OpenClaw Integration (Tier 1 — Plugin-Based)
-
-**Plugin is already fully built** at `openclaw/src/index.ts` (~1000 lines). Has event hooks, SSE observation feed, MEMORY.md sync, slash commands. Only wiring into the installer is needed.
-
-### What to implement
-
-1. **Wire OpenClaw into the npx installer**:
-   - Detect `~/.openclaw/` directory
-   - Copy pre-built plugin from `openclaw/dist/` (built in Phase 2) to OpenClaw plugins location
-   - Register in `~/.openclaw/openclaw.json` under `plugins.claude-mem`
-   - Configure worker port, project name, syncMemoryFile
-   - Optionally prompt for observation feed setup (channel type + target ID)
-
-2. **Add OpenClaw to IDE selection TUI** with hint about messaging channel support
-
-### Verification
-
-- `npx claude-mem install --ide openclaw` registers the plugin
-- OpenClaw gateway loads the plugin on restart
-- Observations are recorded from OpenClaw sessions
-- MEMORY.md syncs to agent workspaces
-
-### Anti-patterns
-
-- Do NOT rebuild the OpenClaw plugin from source at install time — it ships pre-built from Phase 2
-- Do NOT modify the plugin's event handling — it's battle-tested
-
----
-
-## Phase 8: MCP-Based Integrations (Tier 2)
+## Phase 7: MCP-Based Integrations (Tier 2)
 
 **These get the MCP server for free** — it already exists at `plugin/scripts/mcp-server.cjs`. The installer just needs to write the right config files per IDE.
 
@@ -680,7 +644,7 @@ This is a **full replacement**, not a deprecation.
 
 ### All platforms (macOS, Linux, Windows)
 
-1. `npm run build` succeeds, produces `dist/cli/index.js` and `openclaw/dist/index.js`
+1. `npm run build` succeeds, produces `dist/cli/index.js`
 2. `node dist/cli/index.js install` works clean (no prior install)
 3. Auto-detects installed IDEs correctly per platform
 4. `npx claude-mem start/stop/status/search` all work
@@ -699,7 +663,7 @@ This is a **full replacement**, not a deprecation.
 | OpenCode | Plugin | Yes (tool.execute.after, message.updated) | Yes (custom tool) | AGENTS.md / rules |
 | Windsurf | Hooks | Yes (post_cascade_response, etc.) | Yes (via hook) | .windsurf/rules/ |
 | Codex CLI | Transcript | Yes (JSONL watcher) | No (passive only) | .codex/AGENTS.md |
-| OpenClaw | Plugin | Yes (event hooks) | Yes (slash commands) | MEMORY.md |
+
 | Copilot CLI | MCP | No | Yes | copilot-instructions.md |
 | Antigravity | MCP | No | Yes | .agent/rules/ |
 | Goose | MCP | No | Yes | MCP context |
@@ -718,10 +682,9 @@ This is a **full replacement**, not a deprecation.
 | 4 | OpenCode | Plugin (Tier 1) | ~110k stars | Medium (rich plugin SDK) |
 | 5 | Windsurf | Hooks (Tier 1) | ~1M users | Medium |
 | 6 | Codex CLI | Transcript (Tier 3) | Growing (OpenAI) | Low (schema already exists) |
-| 7 | OpenClaw | Plugin (Tier 1) — pre-built | ~196k stars | Low (wire into installer) |
-| 8 | Copilot CLI, Antigravity, Goose, Crush, Warp, Roo Code | MCP (Tier 2) | 20M+ combined | Low per IDE |
-| 9 | (remove old installer) | — | — | Low |
-| 10 | (final verification) | — | — | Low |
+| 7 | Copilot CLI, Antigravity, Goose, Crush, Warp, Roo Code | MCP (Tier 2) | 20M+ combined | Low per IDE |
+| 8 | (remove old installer) | — | — | Low |
+| 9 | (final verification) | — | — | Low |
 
 ## Out of Scope
 
@@ -733,4 +696,3 @@ This is a **full replacement**, not a deprecation.
 - **Aider**: Niche audience, writes Markdown transcripts (not JSONL), would require a markdown parser mode in the watcher. Add if demand materializes.
 - **Continue.dev**: Small user base relative to other MCP tools. Can be added as a Tier 2 MCP integration later if requested.
 - **Toad / Qwen Code / Oh-my-pi**: Too early-stage or too niche. Monitor for growth.
-- **OpenClaw plugin development**: The plugin is already complete. Only installer wiring is in scope.
