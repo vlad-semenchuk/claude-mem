@@ -52,7 +52,6 @@ Build a beautiful, animated CLI installer for claude-mem using `@clack/prompts` 
 - Plugin registration: `plugin/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`
 - Marketplace sync: `scripts/sync-marketplace.cjs`
 - Cursor integration: `src/services/integrations/CursorHooksInstaller.ts`
-- Existing OpenClaw installer: `install/public/openclaw.sh` (reference for logic, not code to copy)
 
 ---
 
@@ -286,7 +285,7 @@ Build a beautiful, animated CLI installer for claude-mem using `@clack/prompts` 
    - Use `p.spinner()` for worker startup:
      - Start worker: `bun plugin/scripts/worker-service.cjs` (from marketplace dir)
      - Write PID file to `~/.claude-mem/worker.pid`
-   - Two-stage health check (copy pattern from OpenClaw installer):
+   - Two-stage health check:
      - Stage 1: Poll `/api/health` — spinner message: "Starting worker service..."
      - Stage 2: Poll `/api/readiness` — spinner message: "Initializing database..."
      - Budget: 30 attempts, 1 second apart
@@ -344,7 +343,7 @@ Build a beautiful, animated CLI installer for claude-mem using `@clack/prompts` 
    - Support `--non-interactive` flag passthrough
    - Support `--provider=X --api-key=Y` flag passthrough
 
-2. **Update `install/vercel.json`** to serve `install.sh` alongside `openclaw.sh`
+2. **Update `install/vercel.json`** to serve `install.sh`
 
 ### Verification
 - [ ] `curl -fsSL https://install.cmem.ai | bash` downloads and runs installer

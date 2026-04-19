@@ -95,7 +95,6 @@ npm install -g claude-mem@12.1.5
 
 **Runtime & reliability**
 - #1698 Reap stuck generators in reapStaleSessions (@ousamabenyounes)
-- #1697 Circuit breaker on OpenClaw worker client (@ousamabenyounes)
 - #1696 Resolve Setup hook reference, warn on macOS-only binary (@ousamabenyounes)
 - #1693 Session lifecycle guards to prevent runaway API spend (@ousamabenyounes)
 - #1692 Resolve Gemini CLI 0.37.0 session capture failures (@ousamabenyounes)
@@ -256,10 +255,8 @@ The `smart-explore` skill now supports **24 programming languages** via tree-sit
 ### Platform Source Isolation
 Claude and Codex sessions are now fully isolated with `platform_source` column on `sdk_sessions`. Each platform gets its own session namespace, preventing cross-contamination between different AI coding tools. Normalized at route boundaries for consistent behavior.
 
-### Codex & OpenClaw Support
+### Codex Support
 - Codex plugin manifest added for marketplace discoverability
-- OpenClaw: `workerHost` config for Docker deployments
-- OpenClaw: handle stale `plugins.allow` and non-interactive TTY in installer
 
 ## New Features
 
@@ -267,7 +264,6 @@ Claude and Codex sessions are now fully isolated with `platform_source` column o
 - **24-language smart-explore** — AST-based code exploration across all major languages
 - **Platform source isolation** — Claude/Codex session namespacing with DB migration
 - **CLAUDE.local.md support** — `CLAUDE_MEM_FOLDER_USE_LOCAL_MD` setting for writing to local-only config
-- **OpenClaw workerHost** — Docker deployment support for OpenClaw plugin
 - **Codex plugin manifest** — discoverability in Codex marketplace
 - **File-size threshold** — skip file-read gating for small files
 - **Observation deduplication** — prevent duplicate observations in timeline gate
@@ -411,7 +407,7 @@ This release consolidates v10.7.0 through v11.0.0, all shipped on April 4, 2026.
 
 ### What changed
 - **Claude Code**: now uses native `claude plugin marketplace add` + `claude plugin install` (the intended simplification)
-- **All other IDEs** (Gemini CLI, OpenCode, Windsurf, OpenClaw, Codex CLI, Copilot CLI, Antigravity, Goose, Crush, Roo Code, Warp): full installer flow restored — file copy, marketplace registration, interactive multi-select via `@clack/prompts`, and IDE-specific setup
+- **All other IDEs** (Gemini CLI, OpenCode, Windsurf, Codex CLI, Copilot CLI, Antigravity, Goose, Crush, Roo Code, Warp): full installer flow restored — file copy, marketplace registration, interactive multi-select via `@clack/prompts`, and IDE-specific setup
 - `--ide <id>` flag works again for direct IDE targeting
 
 ## [10.7.0] - 2026-04-04
@@ -426,7 +422,6 @@ This release consolidates v10.7.0 through v11.0.0, all shipped on April 4, 2026.
 - Gemini CLI hooks installer with lifecycle event mapping
 - Windsurf hooks installer with project registry and context injection
 - OpenCode plugin installer with AGENTS.md context injection
-- OpenClaw plugin installer
 - Codex CLI transcript watcher integration
 - MCP factory pattern for Copilot CLI, Antigravity, Goose, Crush, Roo Code, Warp
 

@@ -188,18 +188,6 @@ async function setupIDEs(selectedIDEs: string[]): Promise<string[]> {
         break;
       }
 
-      case 'openclaw': {
-        const { installOpenClawIntegration } = await import('../../services/integrations/OpenClawInstaller.js');
-        const openClawResult = await installOpenClawIntegration();
-        if (openClawResult === 0) {
-          log.success('OpenClaw: plugin installed.');
-        } else {
-          log.error('OpenClaw: plugin installation failed.');
-          failedIDEs.push(ideId);
-        }
-        break;
-      }
-
       case 'codex-cli': {
         const { installCodexCli } = await import('../../services/integrations/CodexCliInstaller.js');
         const codexResult = await installCodexCli();
@@ -296,7 +284,7 @@ function copyPluginToMarketplace(): void {
   ensureDirectoryExists(marketplaceDir);
 
   // Only copy directories/files that are actually needed at runtime.
-  // The npm package ships plugin/, package.json, node_modules/, openclaw/, dist/.
+  // The npm package ships plugin/, package.json, node_modules/, dist/.
   // When running from a dev checkout, the root contains many extra dirs
   // (.claude, .agents, src, docs, etc.) that must NOT be copied.
   const allowedTopLevelEntries = [
@@ -304,7 +292,6 @@ function copyPluginToMarketplace(): void {
     'package.json',
     'package-lock.json',
     'node_modules',
-    'openclaw',
     'dist',
     'LICENSE',
     'README.md',

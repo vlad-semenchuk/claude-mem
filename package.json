@@ -51,8 +51,7 @@
     "plugin/scripts/*.cjs",
     "plugin/scripts/CLAUDE.md",
     "plugin/skills",
-    "plugin/ui",
-    "openclaw"
+    "plugin/ui"
   ],
   "engines": {
     "node": ">=18.0.0",
