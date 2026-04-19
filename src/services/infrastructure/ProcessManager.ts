@@ -10,8 +10,8 @@
 
 import path from 'path';
 import { homedir } from 'os';
-import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync, rmSync, statSync, utimesSync } from 'fs';
-import { exec, execSync, spawn } from 'child_process';
+import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync, rmSync, statSync, utimesSync, copyFileSync } from 'fs';
+import { exec, execSync, spawn, spawnSync } from 'child_process';
 import { promisify } from 'util';
 import { logger } from '../../utils/logger.js';
 import { HOOK_TIMEOUTS } from '../../shared/hook-constants.js';
@@ -71,20 +71,61 @@ function lookupBinaryInPath(binaryName: string, platform: NodeJS.Platform): stri
   }
 }
 
+// Memoize the resolved runtime path for the no-options call site (which is
+// what spawnDaemon uses). Caches successful resolutions so repeated spawn
+// attempts (crash loops, health thrashing) don't repeatedly hit `statSync`
+// on the candidate paths.
+//
+// IMPORTANT: only success is cached. A `null` result (Bun not found) is
+// never cached so that a long-running MCP server can recover if the user
+// installs Bun in another terminal between the first failed lookup and a
+// subsequent retry. Caching `null` would permanently break the process
+// until restart. Per PR #1645 round-10 review.
+//
+// `undefined` means "not yet resolved"; tests that pass options bypass the
+// cache entirely.
+let cachedWorkerRuntimePath: string | undefined = undefined;
+
+/**
+ * Reset the memoized runtime path. Exported for test isolation only —
+ * production code never needs to call this.
+ */
+export function resetWorkerRuntimePathCache(): void {
+  cachedWorkerRuntimePath = undefined;
+}
+
 /**
  * Resolve the runtime executable for spawning the worker daemon.
  *
- * Windows must prefer Bun because worker-service.cjs imports bun:sqlite,
- * which is unavailable in Node.js.
+ * worker-service.cjs imports `bun:sqlite`, so it MUST run under Bun on every
+ * platform — not just Windows. When the caller is already running under Bun
+ * (e.g. the worker self-spawning from a hook), we reuse process.execPath to
+ * avoid an extra PATH lookup. Otherwise (notably when the MCP server running
+ * under Node spawns the worker for the first time) we locate the Bun binary
+ * via env vars, well-known install locations, and finally the system PATH.
  */
 export function resolveWorkerRuntimePath(options: RuntimeResolverOptions = {}): string | null {
+  // Memoization fast path — only when called with no injected options. Tests
+  // that pass options always run the full resolution (and never populate or
+  // read the cache) to keep the existing test cases deterministic.
+  const isMemoizable = Object.keys(options).length === 0;
+  if (isMemoizable && cachedWorkerRuntimePath !== undefined) {
+    return cachedWorkerRuntimePath;
+  }
+
+  const result = resolveWorkerRuntimePathUncached(options);
+
+  // Only cache successful resolutions. See the comment on
+  // `cachedWorkerRuntimePath` above for the rationale.
+  if (isMemoizable && result !== null) {
+    cachedWorkerRuntimePath = result;
+  }
+  return result;
+}
+
+function resolveWorkerRuntimePathUncached(options: RuntimeResolverOptions): string | null {
   const platform = options.platform ?? process.platform;
   const execPath = options.execPath ?? process.execPath;
-
-  // Non-Windows currently relies on the runtime that launched worker-service.
-  if (platform !== 'win32') {
-    return execPath;
-  }
 
   // If already running under Bun, reuse it directly.
   if (isBunExecutablePath(execPath)) {
@@ -96,15 +137,26 @@ export function resolveWorkerRuntimePath(options: RuntimeResolverOptions = {}): 
   const pathExists = options.pathExists ?? existsSync;
   const lookupInPath = options.lookupInPath ?? lookupBinaryInPath;
 
-  const candidatePaths = [
-    env.BUN,
-    env.BUN_PATH,
-    path.join(homeDirectory, '.bun', 'bin', 'bun.exe'),
-    path.join(homeDirectory, '.bun', 'bin', 'bun'),
-    env.USERPROFILE ? path.join(env.USERPROFILE, '.bun', 'bin', 'bun.exe') : undefined,
-    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, 'bun', 'bun.exe') : undefined,
-    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, 'bun', 'bin', 'bun.exe') : undefined,
-  ];
+  const candidatePaths: (string | undefined)[] = platform === 'win32'
+    ? [
+        env.BUN,
+        env.BUN_PATH,
+        path.join(homeDirectory, '.bun', 'bin', 'bun.exe'),
+        path.join(homeDirectory, '.bun', 'bin', 'bun'),
+        env.USERPROFILE ? path.join(env.USERPROFILE, '.bun', 'bin', 'bun.exe') : undefined,
+        env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, 'bun', 'bun.exe') : undefined,
+        env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, 'bun', 'bin', 'bun.exe') : undefined,
+      ]
+    : [
+        env.BUN,
+        env.BUN_PATH,
+        path.join(homeDirectory, '.bun', 'bin', 'bun'),
+        '/usr/local/bin/bun',
+        '/opt/homebrew/bin/bun',
+        '/home/linuxbrew/.linuxbrew/bin/bun',
+        '/usr/bin/bun', // Debian/Ubuntu apt install path
+        '/snap/bin/bun', // Ubuntu Snap install path
+      ];
 
   for (const candidate of candidatePaths) {
     const normalized = candidate?.trim();
@@ -114,7 +166,11 @@ export function resolveWorkerRuntimePath(options: RuntimeResolverOptions = {}): 
       return normalized;
     }
 
-    // Allow command-style values from env (e.g. BUN=bun)
+    // Allow command-style values from env (e.g. BUN=bun). The previous branch
+    // would also match this candidate via isBunExecutablePath('bun') === true,
+    // but pathExists('bun') is false because it's a relative name — so this
+    // branch is what actually fires for the bare-command case. We return the
+    // bare name unchanged so child_process.spawn() resolves it via PATH.
     if (normalized.toLowerCase() === 'bun') {
       return normalized;
     }
@@ -453,6 +509,19 @@ export async function aggressiveStartupCleanup(): Promise<void> {
   const pidsToKill: number[] = [];
   const allPatterns = [...AGGRESSIVE_CLEANUP_PATTERNS, ...AGE_GATED_CLEANUP_PATTERNS];
 
+  // Protect parent process (the hook that spawned us) from being killed.
+  // Without this, a new daemon kills its own parent hook process (#1426).
+  //
+  // Note: readPidFile() is not used here because start() writes the new PID
+  // before initializeBackground() calls this function, so readPidFile() would
+  // just return process.pid (already protected). If a pre-existing worker needs
+  // protection, ensureWorkerStarted() handles that by returning early when a
+  // healthy worker is detected — we never reach this code in that case.
+  const protectedPids = new Set<number>([currentPid]);
+  if (process.ppid && process.ppid > 0) {
+    protectedPids.add(process.ppid);
+  }
+
   try {
     if (isWindows) {
       // Use WQL -Filter for server-side filtering (no $_ pipeline syntax).
@@ -475,7 +544,7 @@ export async function aggressiveStartupCleanup(): Promise<void> {
 
       for (const proc of processList) {
         const pid = proc.ProcessId;
-        if (!Number.isInteger(pid) || pid <= 0 || pid === currentPid) continue;
+        if (!Number.isInteger(pid) || pid <= 0 || protectedPids.has(pid)) continue;
 
         const commandLine = proc.CommandLine || '';
         const isAggressive = AGGRESSIVE_CLEANUP_PATTERNS.some(p => commandLine.includes(p));
@@ -518,7 +587,7 @@ export async function aggressiveStartupCleanup(): Promise<void> {
         const etime = match[2];
         const command = match[3];
 
-        if (!Number.isInteger(pid) || pid <= 0 || pid === currentPid) continue;
+        if (!Number.isInteger(pid) || pid <= 0 || protectedPids.has(pid)) continue;
 
         const isAggressive = AGGRESSIVE_CLEANUP_PATTERNS.some(p => command.includes(p));
 
@@ -608,6 +677,161 @@ export function runOneTimeChromaMigration(dataDirectory?: string): void {
   logger.info('SYSTEM', 'Chroma migration marker written', { markerPath });
 }
 
+const CWD_REMAP_MARKER_FILENAME = '.cwd-remap-applied-v1';
+
+type CwdClassification =
+  | { kind: 'main'; project: string }
+  | { kind: 'worktree'; project: string }
+  | { kind: 'skip' };
+
+function gitQuery(cwd: string, args: string[]): string | null {
+  const r = spawnSync('git', ['-C', cwd, ...args], {
+    encoding: 'utf8',
+    timeout: 5000
+  });
+  if (r.status !== 0) return null;
+  return (r.stdout ?? '').trim();
+}
+
+function classifyCwdForRemap(cwd: string): CwdClassification {
+  if (!existsSync(cwd)) return { kind: 'skip' };
+
+  const gitDir = gitQuery(cwd, ['rev-parse', '--absolute-git-dir']);
+  if (!gitDir) return { kind: 'skip' };
+
+  const commonDir = gitQuery(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (!commonDir) return { kind: 'skip' };
+
+  const toplevel = gitQuery(cwd, ['rev-parse', '--show-toplevel']);
+  if (!toplevel) return { kind: 'skip' };
+  const leaf = path.basename(toplevel);
+
+  if (gitDir === commonDir) {
+    return { kind: 'main', project: leaf };
+  }
+
+  const parentRepoDir = commonDir.endsWith('/.git')
+    ? path.dirname(commonDir)
+    : commonDir.replace(/\.git$/, '');
+  const parent = path.basename(parentRepoDir);
+  return { kind: 'worktree', project: `${parent}/${leaf}` };
+}
+
+/**
+ * One-time remap of sdk_sessions.project (+ observations.project,
+ * session_summaries.project) using the cwd captured in pending_messages.cwd
+ * as the source of truth. Required because pre-worktree builds stored bare
+ * project names that collide across parent/worktree checkouts.
+ *
+ * Backs up the DB before writes. Idempotent via marker file. Skips silently
+ * if the DB or pending_messages table doesn't exist yet (fresh install).
+ *
+ * @param dataDirectory - Override for DATA_DIR (used in tests)
+ */
+export function runOneTimeCwdRemap(dataDirectory?: string): void {
+  const effectiveDataDir = dataDirectory ?? DATA_DIR;
+  const markerPath = path.join(effectiveDataDir, CWD_REMAP_MARKER_FILENAME);
+  const dbPath = path.join(effectiveDataDir, 'claude-mem.db');
+
+  if (existsSync(markerPath)) {
+    logger.debug('SYSTEM', 'cwd-remap marker exists, skipping');
+    return;
+  }
+
+  if (!existsSync(dbPath)) {
+    mkdirSync(effectiveDataDir, { recursive: true });
+    writeFileSync(markerPath, new Date().toISOString());
+    logger.debug('SYSTEM', 'No DB present, cwd-remap marker written without work', { dbPath });
+    return;
+  }
+
+  logger.warn('SYSTEM', 'Running one-time cwd-based project remap', { dbPath });
+
+  let db: import('bun:sqlite').Database | null = null;
+  try {
+    const { Database } = require('bun:sqlite') as typeof import('bun:sqlite');
+
+    const probe = new Database(dbPath, { readonly: true });
+    const hasPending = probe.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='pending_messages'"
+    ).get() as { name: string } | undefined;
+    probe.close();
+
+    if (!hasPending) {
+      mkdirSync(effectiveDataDir, { recursive: true });
+      writeFileSync(markerPath, new Date().toISOString());
+      logger.info('SYSTEM', 'pending_messages table not present, cwd-remap skipped');
+      return;
+    }
+
+    const backup = `${dbPath}.bak-cwd-remap-${Date.now()}`;
+    copyFileSync(dbPath, backup);
+    logger.info('SYSTEM', 'DB backed up before cwd-remap', { backup });
+
+    db = new Database(dbPath);
+
+    const cwdRows = db.prepare(`
+      SELECT cwd FROM pending_messages
+      WHERE cwd IS NOT NULL AND cwd != ''
+      GROUP BY cwd
+    `).all() as Array<{ cwd: string }>;
+
+    const byCwd = new Map<string, CwdClassification>();
+    for (const { cwd } of cwdRows) byCwd.set(cwd, classifyCwdForRemap(cwd));
+
+    const sessionRows = db.prepare(`
+      SELECT s.id AS session_id, s.memory_session_id, s.project AS old_project, p.cwd
+      FROM sdk_sessions s
+      JOIN pending_messages p ON p.content_session_id = s.content_session_id
+      WHERE p.cwd IS NOT NULL AND p.cwd != ''
+        AND p.id = (
+          SELECT MIN(p2.id) FROM pending_messages p2
+          WHERE p2.content_session_id = s.content_session_id
+            AND p2.cwd IS NOT NULL AND p2.cwd != ''
+        )
+    `).all() as Array<{ session_id: number; memory_session_id: string | null; old_project: string; cwd: string }>;
+
+    type Target = { sessionId: number; memorySessionId: string | null; newProject: string };
+    const targets: Target[] = [];
+    for (const r of sessionRows) {
+      const c = byCwd.get(r.cwd);
+      if (!c || c.kind === 'skip') continue;
+      if (r.old_project === c.project) continue;
+      targets.push({ sessionId: r.session_id, memorySessionId: r.memory_session_id, newProject: c.project });
+    }
+
+    if (targets.length === 0) {
+      logger.info('SYSTEM', 'cwd-remap: no sessions need updating');
+    } else {
+      const updSession = db.prepare('UPDATE sdk_sessions      SET project = ? WHERE id = ?');
+      const updObs     = db.prepare('UPDATE observations      SET project = ? WHERE memory_session_id = ?');
+      const updSum     = db.prepare('UPDATE session_summaries SET project = ? WHERE memory_session_id = ?');
+
+      let sessionN = 0, obsN = 0, sumN = 0;
+      const tx = db.transaction(() => {
+        for (const t of targets) {
+          sessionN += updSession.run(t.newProject, t.sessionId).changes;
+          if (t.memorySessionId) {
+            obsN += updObs.run(t.newProject, t.memorySessionId).changes;
+            sumN += updSum.run(t.newProject, t.memorySessionId).changes;
+          }
+        }
+      });
+      tx();
+
+      logger.info('SYSTEM', 'cwd-remap applied', { sessions: sessionN, observations: obsN, summaries: sumN, backup });
+    }
+
+    mkdirSync(effectiveDataDir, { recursive: true });
+    writeFileSync(markerPath, new Date().toISOString());
+    logger.info('SYSTEM', 'cwd-remap marker written', { markerPath });
+  } catch (err) {
+    logger.error('SYSTEM', 'cwd-remap failed, marker not written (will retry on next startup)', {}, err as Error);
+  } finally {
+    db?.close();
+  }
+}
+
 /**
  * Spawn a detached daemon process
  * Returns the child PID or undefined if spawn failed
@@ -635,29 +859,45 @@ export function spawnDaemon(
     ...extraEnv
   });
 
+  // worker-service.cjs imports `bun:sqlite`, so the spawned runtime MUST be
+  // Bun on every platform — never the current process.execPath, which may be
+  // Node when the caller is the MCP server. Resolve once before the OS branch
+  // split so we don't pay for a duplicate PATH lookup if Bun isn't found at a
+  // well-known path. See resolveWorkerRuntimePath() for the candidate list.
+  const runtimePath = resolveWorkerRuntimePath();
+  if (!runtimePath) {
+    logger.error(
+      'SYSTEM',
+      'Bun runtime not found — install from https://bun.sh and ensure it is on PATH or set BUN env var. The worker daemon requires Bun because it uses bun:sqlite.'
+    );
+    return undefined;
+  }
+
   if (isWindows) {
     // Use PowerShell Start-Process to spawn a hidden, independent process
     // Unlike WMIC, PowerShell inherits environment variables from parent
     // -WindowStyle Hidden prevents console popup
-    const runtimePath = resolveWorkerRuntimePath();
 
-    if (!runtimePath) {
-      logger.error('SYSTEM', 'Failed to locate Bun runtime for Windows worker spawn');
-      return undefined;
-    }
-
-    const escapedRuntimePath = runtimePath.replace(/'/g, "''");
-    const escapedScriptPath = scriptPath.replace(/'/g, "''");
-    const psCommand = `Start-Process -FilePath '${escapedRuntimePath}' -ArgumentList '${escapedScriptPath}','--daemon' -WindowStyle Hidden`;
+    // Use -EncodedCommand to avoid all shell quoting issues with spaces in paths
+    const psScript = `Start-Process -FilePath '${runtimePath.replace(/'/g, "''")}' -ArgumentList @('${scriptPath.replace(/'/g, "''")}','--daemon') -WindowStyle Hidden`;
+    const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
 
     try {
-      execSync(`powershell -NoProfile -Command "${psCommand}"`, {
+      execSync(`powershell -NoProfile -EncodedCommand ${encodedCommand}`, {
         stdio: 'ignore',
         windowsHide: true,
         env
       });
+      // Windows success sentinel: PowerShell `Start-Process` does not return
+      // the spawned PID, and we don't want to pay for an extra `Get-Process`
+      // round-trip just to discover it. Return 0 (a conventionally invalid
+      // Unix PID) so callers can distinguish "spawn dispatched" from "spawn
+      // failed". Callers MUST use `pid === undefined` to detect failure —
+      // never falsy checks like `if (!pid)`, which would silently treat
+      // success as failure here.
       return 0;
     } catch (error) {
+      // APPROVED OVERRIDE: Windows daemon spawn is best-effort; log and let callers fall back to health checks/retry flow.
       logger.error('SYSTEM', 'Failed to spawn worker daemon on Windows', { runtimePath }, error as Error);
       return undefined;
     }
@@ -667,9 +907,10 @@ export function spawnDaemon(
   // controlling terminal. This prevents SIGHUP from reaching the daemon
   // even if the in-process SIGHUP handler somehow fails (belt-and-suspenders).
   // Fall back to standard detached spawn if setsid is not available.
+  // `runtimePath` was resolved at the top of this function (see comment there).
   const setsidPath = '/usr/bin/setsid';
   if (existsSync(setsidPath)) {
-    const child = spawn(setsidPath, [process.execPath, scriptPath, '--daemon'], {
+    const child = spawn(setsidPath, [runtimePath, scriptPath, '--daemon'], {
       detached: true,
       stdio: 'ignore',
       env
@@ -684,7 +925,7 @@ export function spawnDaemon(
   }
 
   // Fallback: standard detached spawn (macOS, systems without setsid)
-  const child = spawn(process.execPath, [scriptPath, '--daemon'], {
+  const child = spawn(runtimePath, [scriptPath, '--daemon'], {
     detached: true,
     stdio: 'ignore',
     env

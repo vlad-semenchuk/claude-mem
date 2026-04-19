@@ -212,6 +212,36 @@ describe('ResponseProcessor', () => {
     });
   });
 
+  describe('non-XML observer responses', () => {
+    it('warns when the observer returns prose that will be discarded', async () => {
+      const session = createMockSession();
+      const responseText = 'Skipping — repeated log scan with no new findings.';
+
+      await processAgentResponse(
+        responseText,
+        session,
+        mockDbManager,
+        mockSessionManager,
+        mockWorker,
+        100,
+        null,
+        'TestAgent'
+      );
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'PARSER',
+        'TestAgent returned non-XML response; observation content was discarded',
+        expect.objectContaining({
+          sessionId: 1,
+          preview: responseText
+        })
+      );
+      const [, , observations, summary] = mockStoreObservations.mock.calls[0];
+      expect(observations).toHaveLength(0);
+      expect(summary).toBeNull();
+    });
+  });
+
   describe('parsing summary from XML response', () => {
     it('should parse summary from response', async () => {
       const session = createMockSession();
@@ -651,6 +681,49 @@ describe('ResponseProcessor', () => {
           'TestAgent'
         )
       ).rejects.toThrow('Cannot store observations: memorySessionId not yet captured');
+    });
+  });
+
+  describe('lastSummaryStored tracking (#1633)', () => {
+    it('should set lastSummaryStored=true when storage returns a summaryId', async () => {
+      mockStoreObservations.mockImplementation(() => ({
+        observationIds: [],
+        summaryId: 42,
+        createdAtEpoch: 1700000000000,
+      } as StorageResult));
+
+      const session = createMockSession();
+      const responseText = `
+        <summary>
+          <request>user asked to fix bug</request>
+          <investigated>looked at auth module</investigated>
+          <learned>JWT tokens were expiring</learned>
+          <completed>fixed expiry check</completed>
+          <next_steps>write tests</next_steps>
+        </summary>
+      `;
+
+      await processAgentResponse(responseText, session, mockDbManager, mockSessionManager, mockWorker, 0, null, 'TestAgent');
+
+      expect(session.lastSummaryStored).toBe(true);
+    });
+
+    it('should set lastSummaryStored=false when storage returns summaryId=null (silent loss path, #1633)', async () => {
+      // Simulate the silent failure: agent returns no parseable <summary> tags,
+      // storeObservations skips summary and returns summaryId=null.
+      mockStoreObservations.mockImplementation(() => ({
+        observationIds: [],
+        summaryId: null,
+        createdAtEpoch: 1700000000000,
+      } as StorageResult));
+
+      const session = createMockSession();
+      // Response with no <summary> block — LLM failed to produce structured output
+      const responseText = '<skip_summary/>';
+
+      await processAgentResponse(responseText, session, mockDbManager, mockSessionManager, mockWorker, 0, null, 'TestAgent');
+
+      expect(session.lastSummaryStored).toBe(false);
     });
   });
 });

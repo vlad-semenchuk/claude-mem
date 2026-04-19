@@ -8,6 +8,7 @@ import path from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { SessionStore } from '../sqlite/SessionStore.js';
 import { logger } from '../../utils/logger.js';
+import { SYSTEM_REMINDER_REGEX } from '../../utils/tag-stripping.js';
 import { CLAUDE_CONFIG_DIR } from '../../shared/paths.js';
 import type {
   ContextConfig,
@@ -25,7 +26,8 @@ import { SUMMARY_LOOKAHEAD } from './types.js';
 export function queryObservations(
   db: SessionStore,
   project: string,
-  config: ContextConfig
+  config: ContextConfig,
+  platformSource?: string
 ): Observation[] {
   const typeArray = Array.from(config.observationTypes);
   const typePlaceholders = typeArray.map(() => '?').join(',');
@@ -34,19 +36,39 @@ export function queryObservations(
 
   return db.db.prepare(`
     SELECT
-      id, memory_session_id, type, title, subtitle, narrative,
-      facts, concepts, files_read, files_modified, discovery_tokens,
-      created_at, created_at_epoch
-    FROM observations
-    WHERE project = ?
+      o.id,
+      o.memory_session_id,
+      COALESCE(s.platform_source, 'claude') as platform_source,
+      o.type,
+      o.title,
+      o.subtitle,
+      o.narrative,
+      o.facts,
+      o.concepts,
+      o.files_read,
+      o.files_modified,
+      o.discovery_tokens,
+      o.created_at,
+      o.created_at_epoch
+    FROM observations o
+    LEFT JOIN sdk_sessions s ON o.memory_session_id = s.memory_session_id
+    WHERE (o.project = ? OR o.merged_into_project = ?)
       AND type IN (${typePlaceholders})
       AND EXISTS (
-        SELECT 1 FROM json_each(concepts)
+        SELECT 1 FROM json_each(o.concepts)
         WHERE value IN (${conceptPlaceholders})
       )
-    ORDER BY created_at_epoch DESC
+      ${platformSource ? "AND COALESCE(s.platform_source, 'claude') = ?" : ''}
+    ORDER BY o.created_at_epoch DESC
     LIMIT ?
-  `).all(project, ...typeArray, ...conceptArray, config.totalObservationCount) as Observation[];
+  `).all(
+    project,
+    project,
+    ...typeArray,
+    ...conceptArray,
+    ...(platformSource ? [platformSource] : []),
+    config.totalObservationCount
+  ) as Observation[];
 }
 
 /**
@@ -55,15 +77,30 @@ export function queryObservations(
 export function querySummaries(
   db: SessionStore,
   project: string,
-  config: ContextConfig
+  config: ContextConfig,
+  platformSource?: string
 ): SessionSummary[] {
   return db.db.prepare(`
-    SELECT id, memory_session_id, request, investigated, learned, completed, next_steps, created_at, created_at_epoch
-    FROM session_summaries
-    WHERE project = ?
-    ORDER BY created_at_epoch DESC
+    SELECT
+      ss.id,
+      ss.memory_session_id,
+      COALESCE(s.platform_source, 'claude') as platform_source,
+      ss.request,
+      ss.investigated,
+      ss.learned,
+      ss.completed,
+      ss.next_steps,
+      ss.created_at,
+      ss.created_at_epoch
+    FROM session_summaries ss
+    LEFT JOIN sdk_sessions s ON ss.memory_session_id = s.memory_session_id
+    WHERE (ss.project = ? OR ss.merged_into_project = ?)
+      ${platformSource ? "AND COALESCE(s.platform_source, 'claude') = ?" : ''}
+    ORDER BY ss.created_at_epoch DESC
     LIMIT ?
-  `).all(project, config.sessionCount + SUMMARY_LOOKAHEAD) as SessionSummary[];
+  `).all(
+    ...[project, project, ...(platformSource ? [platformSource] : []), config.sessionCount + SUMMARY_LOOKAHEAD]
+  ) as SessionSummary[];
 }
 
 /**
@@ -75,7 +112,8 @@ export function querySummaries(
 export function queryObservationsMulti(
   db: SessionStore,
   projects: string[],
-  config: ContextConfig
+  config: ContextConfig,
+  platformSource?: string
 ): Observation[] {
   const typeArray = Array.from(config.observationTypes);
   const typePlaceholders = typeArray.map(() => '?').join(',');
@@ -87,19 +125,41 @@ export function queryObservationsMulti(
 
   return db.db.prepare(`
     SELECT
-      id, memory_session_id, type, title, subtitle, narrative,
-      facts, concepts, files_read, files_modified, discovery_tokens,
-      created_at, created_at_epoch, project
-    FROM observations
-    WHERE project IN (${projectPlaceholders})
+      o.id,
+      o.memory_session_id,
+      COALESCE(s.platform_source, 'claude') as platform_source,
+      o.type,
+      o.title,
+      o.subtitle,
+      o.narrative,
+      o.facts,
+      o.concepts,
+      o.files_read,
+      o.files_modified,
+      o.discovery_tokens,
+      o.created_at,
+      o.created_at_epoch,
+      o.project
+    FROM observations o
+    LEFT JOIN sdk_sessions s ON o.memory_session_id = s.memory_session_id
+    WHERE (o.project IN (${projectPlaceholders})
+           OR o.merged_into_project IN (${projectPlaceholders}))
       AND type IN (${typePlaceholders})
       AND EXISTS (
-        SELECT 1 FROM json_each(concepts)
+        SELECT 1 FROM json_each(o.concepts)
         WHERE value IN (${conceptPlaceholders})
       )
-    ORDER BY created_at_epoch DESC
+      ${platformSource ? "AND COALESCE(s.platform_source, 'claude') = ?" : ''}
+    ORDER BY o.created_at_epoch DESC
     LIMIT ?
-  `).all(...projects, ...typeArray, ...conceptArray, config.totalObservationCount) as Observation[];
+  `).all(
+    ...projects,
+    ...projects,
+    ...typeArray,
+    ...conceptArray,
+    ...(platformSource ? [platformSource] : []),
+    config.totalObservationCount
+  ) as Observation[];
 }
 
 /**
@@ -111,18 +171,33 @@ export function queryObservationsMulti(
 export function querySummariesMulti(
   db: SessionStore,
   projects: string[],
-  config: ContextConfig
+  config: ContextConfig,
+  platformSource?: string
 ): SessionSummary[] {
   // Build IN clause for projects
   const projectPlaceholders = projects.map(() => '?').join(',');
 
   return db.db.prepare(`
-    SELECT id, memory_session_id, request, investigated, learned, completed, next_steps, created_at, created_at_epoch, project
-    FROM session_summaries
-    WHERE project IN (${projectPlaceholders})
-    ORDER BY created_at_epoch DESC
+    SELECT
+      ss.id,
+      ss.memory_session_id,
+      COALESCE(s.platform_source, 'claude') as platform_source,
+      ss.request,
+      ss.investigated,
+      ss.learned,
+      ss.completed,
+      ss.next_steps,
+      ss.created_at,
+      ss.created_at_epoch,
+      ss.project
+    FROM session_summaries ss
+    LEFT JOIN sdk_sessions s ON ss.memory_session_id = s.memory_session_id
+    WHERE (ss.project IN (${projectPlaceholders})
+           OR ss.merged_into_project IN (${projectPlaceholders}))
+      ${platformSource ? "AND COALESCE(s.platform_source, 'claude') = ?" : ''}
+    ORDER BY ss.created_at_epoch DESC
     LIMIT ?
-  `).all(...projects, config.sessionCount + SUMMARY_LOOKAHEAD) as SessionSummary[];
+  `).all(...projects, ...projects, ...(platformSource ? [platformSource] : []), config.sessionCount + SUMMARY_LOOKAHEAD) as SessionSummary[];
 }
 
 /**
@@ -164,7 +239,7 @@ export function extractPriorMessages(transcriptPath: string): PriorMessages {
               text += block.text;
             }
           }
-          text = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+          text = text.replace(SYSTEM_REMINDER_REGEX, '').trim();
           if (text) {
             lastAssistantMessage = text;
             break;
